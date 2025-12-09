@@ -1,55 +1,161 @@
+// package main
+
+// import (
+// 	"fmt"
+// 	"log"
+
+// 	"sqlalchemy/converter"
+// )
+
+// func main() {
+// 	// 原始 SQL
+// 	// originalSQL := `
+// 	// 	SELECT c.code, value, message
+// 	// 	FROM factory_alarm_pump_alarm
+// 	// 	WHERE threshold > 20 OR threshold < 16
+// 	// 	ORDER BY value DESC
+// 	// 	LIMIT 10
+// 	// `
+// 	originalSQL :=
+// 		`SELECT code,
+// 		COUNT(*) as alarm_count,
+// 		MAX(value) as max_value,
+// 		MIN(value) as min_value,
+// 		AVG(value) as avg_value
+// 		FROM factory_alarm_pump_alarm
+// 		WHERE threshold > 20 OR threshold < 16
+// 		GROUP BY code
+// 		HAVING COUNT(*) > 0
+// 		ORDER BY alarm_count DESC, max_value DESC
+// 		LIMIT 10;`
+
+// 	// 调用 converter 解析并映射
+// 	numericFields := map[string]struct{}{
+// 		"threshold": {},
+// 		"value":     {},
+// 	}
+
+// 	mapper, err := converter.ParseAndMapSQL(originalSQL, numericFields)
+// 	if err != nil {
+// 		log.Fatalf("SQL parse/map failed: %v", err)
+// 	}
+
+//		// 输出结果
+//		fmt.Println("Original SQL:")
+//		fmt.Println(mapper.OriginalSQL)
+//		fmt.Println("\nMapped SQL:")
+//		fmt.Println(mapper.MappedSQL)
+//	}
+
+// package main
+
+// import (
+// 	"fmt"
+// 	"log"
+
+// 	"sqlalchemy/db"
+// )
+
+// func main() {
+
+// 	// 1) 初始化数据库配置（使用 DBConfig）
+// 	cfg := db.DBConfig{
+// 		Host:     "127.0.0.1",
+// 		Port:     5432,
+// 		DBName:   "tsdb",
+// 		User:     "postgres",
+// 		Password: "123456",
+// 	}
+
+// 	// 2) 目标 JSONB 表及列
+// 	table := "tsdb_table"
+// 	jsonbCol := "payload"
+
+// 	fmt.Println("🔍 Loading numeric fields from PostgreSQL...")
+
+// 	// 3) 调用优化后的函数（只需传 DBConfig + 表和列名）
+// 	topicFields, err := db.LoadNumericFields(cfg, table, jsonbCol)
+// 	if err != nil {
+// 		log.Fatalf("❌ load numeric fields failed: %v", err)
+// 	}
+
+// 	fmt.Println("\n🚀 Numeric Fields by Topic")
+// 	fmt.Println("====================================")
+
+// 	// 4) 输出结果
+// 	for topic, fields := range topicFields {
+// 		fmt.Printf("📌 Topic: %s\n", topic)
+// 		for field := range fields {
+// 			fmt.Printf("  - %s\n", field)
+// 		}
+// 		fmt.Println("------------------------------------")
+// 	}
+
+//		fmt.Println("✅ Done.")
+//	}
 package main
 
 import (
+	"fmt"
 	"log"
 
-	"sql-engine/database"
-	"sql-engine/handlers"
-
-	"github.com/gin-gonic/gin"
+	"sqlalchemy/converter"
+	"sqlalchemy/db"
 )
 
 func main() {
-	// Initialize database
-	dsn := "postgres://postgres:123456@localhost:5432/tsdb"
-	if err := database.Init(dsn); err != nil {
-		log.Fatal("Database connection failed:", err)
+	cfg := db.DBConfig{
+		Host:     "127.0.0.1",
+		Port:     5432,
+		DBName:   "tsdb",
+		User:     "postgres",
+		Password: "123456",
 	}
-	defer database.Close()
 
-	// Create handlers
-	handler := handlers.NewHandler(database.DB)
+	table := "tsdb_table"
+	jsonbCol := "payload"
 
-	// Setup routes
-	r := gin.Default()
+	fmt.Println("🔍 Loading numeric fields from PostgreSQL...")
 
-	r.Use(func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", "*")
-		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+	topicFields, err := db.LoadNumericFields(cfg, table, jsonbCol)
+	if err != nil {
+		log.Fatalf("❌ load numeric fields failed: %v", err)
+	}
 
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(204)
-			return
+	numericFields := make(map[string]struct{})
+
+	for _, fields := range topicFields {
+		for field := range fields {
+			numericFields[field] = struct{}{}
 		}
-
-		c.Next()
-	})
-
-	// Schema routes
-	r.GET("/databases", handler.GetDatabases)
-	r.GET("/tables", handler.GetTables)
-	r.GET("/table/:name/columns", handler.GetTableColumns)
-	r.GET("/table/:name/primary-keys", handler.GetTablePrimaryKeys)
-	r.GET("/table/:name/foreign-keys", handler.GetTableForeignKeys)
-	r.GET("/schema", handler.GetFullSchema)
-
-	// Query route
-	r.POST("/run-query", handler.RunQuery)
-
-	// Start server
-	log.Println("Server starting on :8080")
-	if err := r.Run(":8080"); err != nil {
-		log.Fatal("Server failed to start:", err)
 	}
+
+	fmt.Println("📦 Numeric fields loaded:", numericFields)
+
+	originalSQL :=
+		`SELECT code,
+		COUNT(*) as alarm_count,
+		MAX(value) as max_value,
+		MIN(value) as min_value,
+		AVG(value) as avg_value
+		FROM factory_alarm_pump_alarm
+		WHERE threshold > 20 OR threshold < 16
+		GROUP BY code
+		HAVING COUNT(*) > 0
+		ORDER BY alarm_count DESC, max_value DESC
+		LIMIT 10;`
+
+	mapper, err := converter.ParseAndMapSQL(originalSQL, numericFields)
+	if err != nil {
+		log.Fatalf("❌ SQL parse/map failed: %v", err)
+	}
+
+	fmt.Println("\n====================================")
+	fmt.Println("Original SQL:")
+	fmt.Println(originalSQL)
+
+	fmt.Println("\nMapped SQL:")
+	fmt.Println(mapper.MappedSQL)
+
+	fmt.Println("\n📌 Done.")
 }
