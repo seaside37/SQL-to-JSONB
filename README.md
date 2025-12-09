@@ -2,7 +2,7 @@
 
 ## 📋 项目概述
 
-SQL-to-JSONB转换器是一个用于将标准SQL查询转换为针对PostgreSQL JSONB格式数据的查询。它适用于需要从JSONB字段中提取和查询结构化数据的场景。
+SQL-to-JSONB转换器用于将标准SQL查询转换为针对PostgreSQL JSONB格式数据查询。它适用于需要从JSONB字段中提取和查询结构化数据的场景，例如用JSON格式整合系统中的所有数据表。
 
 ### 名词解释：
 - **表名**：进行查询的数据所在的实际 PostgreSQL 表。
@@ -65,7 +65,22 @@ project/
 - `*SQLMapper`: 包含原始SQL和转换后SQL的结构体
 - `error`: 转换过程中的错误
 
-#### 2. SQLMapper 结构体
+#### 2. MapSQLShot
+
+**作用**：封装整个SQL映射管道
+
+**参数**：
+- `host, port, dbName, user, password`: 数据库连接信息
+- `table`: 数据表名
+- `payloadCol`: JSONB 列名
+- `topicField`: JSONB 字段名
+- `originalSQL`: 原始SQL查询字符串
+
+**返回值**：
+- `mappedSQL`: 转换后SQL字符串
+- `error`: 转换过程中的错误
+
+#### 3. SQLMapper 结构体
 
 ```go
 type SQLMapper struct {
