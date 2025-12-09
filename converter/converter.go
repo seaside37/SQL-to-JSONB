@@ -7,6 +7,32 @@ import (
 	"github.com/xwb1989/sqlparser"
 )
 
+func NewSQLMapper(sql string, numericFields map[string]struct{}, table, payloadCol, topic string) (*SQLMapper, error) {
+	mapper := &SQLMapper{
+		OriginalSQL:   sql,
+		NumericFields: numericFields,
+		TableName:     table,
+		PayloadCol:    payloadCol,
+		Topic:         topic,
+	}
+
+	stmt, err := sqlparser.Parse(sql)
+	if err != nil {
+		return nil, err
+	}
+
+	switch stmt := stmt.(type) {
+	case *sqlparser.Select:
+		mapper.MappedSQL = mapper.mapSelectStatement(stmt)
+	case *sqlparser.Union:
+		mapper.MappedSQL = mapper.mapUnionStatement(stmt)
+	default:
+		return nil, fmt.Errorf("SQL Type not supported: %T", stmt)
+	}
+
+	return mapper, nil
+}
+
 func ParseAndMapSQL(sql string, numericFields map[string]struct{}) (*SQLMapper, error) {
 	stmt, err := sqlparser.Parse(sql)
 	if err != nil {
@@ -18,7 +44,6 @@ func ParseAndMapSQL(sql string, numericFields map[string]struct{}) (*SQLMapper, 
 		NumericFields: numericFields,
 	}
 
-	// Select or Union statements
 	switch stmt := stmt.(type) {
 	case *sqlparser.Select:
 		mapper.MappedSQL = mapper.mapSelectStatement(stmt)
@@ -32,10 +57,7 @@ func ParseAndMapSQL(sql string, numericFields map[string]struct{}) (*SQLMapper, 
 }
 
 func (mapper *SQLMapper) mapSelectStatement(selectStmt *sqlparser.Select) string {
-	// 保存列别名映射，key: alias, value: 原表达式
 	aliasMap := make(map[string]string)
-
-	// 处理 SELECT 表达式
 	selectExprs := make([]string, 0, len(selectStmt.SelectExprs))
 	for _, selectExpr := range selectStmt.SelectExprs {
 		mapped := mapper.mapSelectExpr(selectExpr)
@@ -57,7 +79,6 @@ func (mapper *SQLMapper) mapSelectStatement(selectStmt *sqlparser.Select) string
 		}
 	}
 
-	// FROM 子句
 	fromClause := ""
 	hasTableCondition := false
 	if selectStmt.From != nil {
@@ -72,7 +93,6 @@ func (mapper *SQLMapper) mapSelectStatement(selectStmt *sqlparser.Select) string
 		fromClause = "FROM " + strings.Join(fromParts, ", ")
 	}
 
-	// 构建基础 SQL
 	parts := []string{
 		"SELECT",
 		strings.Join(selectExprs, ", "),
@@ -81,7 +101,6 @@ func (mapper *SQLMapper) mapSelectStatement(selectStmt *sqlparser.Select) string
 		parts = append(parts, fromClause)
 	}
 
-	// WHERE 子句
 	whereConditions := make([]string, 0)
 	if hasTableCondition {
 		tableConditions := mapper.extractTableConditions(selectStmt.From)
@@ -106,7 +125,6 @@ func (mapper *SQLMapper) mapSelectStatement(selectStmt *sqlparser.Select) string
 		parts = append(parts, "WHERE", whereClause)
 	}
 
-	// GROUP BY 子句
 	if selectStmt.GroupBy != nil {
 		groupByParts := make([]string, 0, len(selectStmt.GroupBy))
 		for _, expr := range selectStmt.GroupBy {
@@ -123,7 +141,6 @@ func (mapper *SQLMapper) mapSelectStatement(selectStmt *sqlparser.Select) string
 		parts = append(parts, "GROUP BY", strings.Join(groupByParts, ", "))
 	}
 
-	// HAVING 子句
 	if selectStmt.Having != nil {
 		havingStr := ""
 		switch h := selectStmt.Having.Expr.(type) {
@@ -145,7 +162,6 @@ func (mapper *SQLMapper) mapSelectStatement(selectStmt *sqlparser.Select) string
 		parts = append(parts, "HAVING", havingStr)
 	}
 
-	// ORDER BY 子句
 	if selectStmt.OrderBy != nil {
 		orderByParts := make([]string, 0, len(selectStmt.OrderBy))
 		for _, order := range selectStmt.OrderBy {
@@ -175,7 +191,6 @@ func (mapper *SQLMapper) mapSelectStatement(selectStmt *sqlparser.Select) string
 		parts = append(parts, "ORDER BY", strings.Join(orderByParts, ", "))
 	}
 
-	// LIMIT 子句
 	if selectStmt.Limit != nil {
 		limitParts := []string{"LIMIT", mapper.mapExpr(selectStmt.Limit.Rowcount)}
 		if selectStmt.Limit.Offset != nil {
@@ -213,8 +228,8 @@ func (mapper *SQLMapper) mapAliasedTableExprWithCondition(table *sqlparser.Alias
 	switch expr := table.Expr.(type) {
 	case sqlparser.TableName:
 		tableName := expr.Name.String()
-		if tableName != "" && tableName != "tsdb_table" {
-			mappedTable := "tsdb_table"
+		if tableName != "" && tableName != mapper.TableName {
+			mappedTable := mapper.TableName
 			if !table.As.IsEmpty() {
 				mappedTable += " AS " + table.As.String()
 			}
@@ -248,10 +263,10 @@ func (mapper *SQLMapper) extractConditionsFromTableExpr(tableExpr sqlparser.Tabl
 		switch table := expr.Expr.(type) {
 		case sqlparser.TableName:
 			tableName := table.Name.String()
-			if tableName != "" && tableName != "tsdb_table" {
-				condition := fmt.Sprintf("(payload ->> 'topic') = '%s'", tableName)
+			if tableName != "" && tableName != mapper.TableName {
+				condition := fmt.Sprintf("(%s ->> '%s') = '%s'", mapper.PayloadCol, mapper.Topic, tableName)
 				if !expr.As.IsEmpty() {
-					condition = fmt.Sprintf("%s.payload ->> 'topic' = '%s'", expr.As.String(), tableName)
+					condition = fmt.Sprintf("(%s.%s ->> '%s') = '%s'", expr.As.String(), mapper.PayloadCol, mapper.Topic, tableName)
 				}
 				*conditions = append(*conditions, condition)
 			}
@@ -276,19 +291,15 @@ func (mapper *SQLMapper) mapJoinTableExpr(join *sqlparser.JoinTableExpr) string 
 
 func (mapper *SQLMapper) mapSelectExpr(expr sqlparser.SelectExpr) string {
 	switch se := expr.(type) {
-
 	case *sqlparser.AliasedExpr:
-
 		if fn, ok := se.Expr.(*sqlparser.FuncExpr); ok {
 			mapped := mapper.mapExpr(fn)
-
 			alias := ""
 			if !se.As.IsEmpty() {
 				alias = se.As.String()
 			} else {
 				alias = fn.Name.String()
 			}
-
 			return fmt.Sprintf("%s AS %s", mapped, alias)
 		}
 
@@ -302,7 +313,7 @@ func (mapper *SQLMapper) mapSelectExpr(expr sqlparser.SelectExpr) string {
 			} else {
 				alias = colName
 			}
-			return fmt.Sprintf("(payload ->> '%s') AS %s", colName, alias)
+			return fmt.Sprintf("(%s ->> '%s') AS %s", mapper.PayloadCol, colName, alias)
 		}
 
 		mapped := mapper.mapExpr(se.Expr)
@@ -314,7 +325,6 @@ func (mapper *SQLMapper) mapSelectExpr(expr sqlparser.SelectExpr) string {
 
 	case *sqlparser.StarExpr:
 		return "*"
-
 	default:
 		return sqlparser.String(expr)
 	}
@@ -328,20 +338,16 @@ func (mapper *SQLMapper) mapExpr(expr sqlparser.Expr) string {
 	switch e := expr.(type) {
 	case *sqlparser.ColName:
 		columnName := e.Name.String()
-		mapped := fmt.Sprintf("(payload ->> '%s')", columnName)
-
-		// check if numeric field
+		mapped := fmt.Sprintf("(%s ->> '%s')", mapper.PayloadCol, columnName)
 		if _, ok := mapper.NumericFields[columnName]; ok {
 			mapped += "::FLOAT"
 		}
-
 		if e.Qualifier.Name.String() != "" {
-			mapped = fmt.Sprintf("(%s.payload ->> '%s')", e.Qualifier.Name.String(), columnName)
+			mapped = fmt.Sprintf("(%s.%s ->> '%s')", e.Qualifier.Name.String(), mapper.PayloadCol, columnName)
 			if _, ok := mapper.NumericFields[columnName]; ok {
 				mapped += "::FLOAT"
 			}
 		}
-
 		return mapped
 
 	case *sqlparser.SQLVal:
@@ -365,20 +371,16 @@ func (mapper *SQLMapper) mapExpr(expr sqlparser.Expr) string {
 		return fmt.Sprintf("%s IS %s", left, e.Operator)
 	case *sqlparser.FuncExpr:
 		args := make([]string, 0, len(e.Exprs))
-
 		for _, expr := range e.Exprs {
 			switch ae := expr.(type) {
 			case *sqlparser.AliasedExpr:
 				args = append(args, mapper.mapExpr(ae.Expr))
-
 			case *sqlparser.StarExpr:
 				args = append(args, "*")
-
 			default:
 				args = append(args, mapper.mapExpr(ae.(sqlparser.Expr)))
 			}
 		}
-
 		return fmt.Sprintf("%s(%s)", e.Name.String(), strings.Join(args, ", "))
 	case *sqlparser.OrExpr:
 		return fmt.Sprintf("%s OR %s", mapper.mapExpr(e.Left), mapper.mapExpr(e.Right))
@@ -396,15 +398,11 @@ func (mapper *SQLMapper) mapExpr(expr sqlparser.Expr) string {
 func (mapper *SQLMapper) mapUnionStatement(union *sqlparser.Union) string {
 	left := mapper.mapSelectStatement(union.Left.(*sqlparser.Select))
 	right := mapper.mapSelectStatement(union.Right.(*sqlparser.Select))
-
 	parts := []string{left, "UNION"}
-
 	if strings.Contains(strings.ToUpper(sqlparser.String(union)), "UNION ALL") {
 		parts = append(parts, "ALL")
 	}
-
 	parts = append(parts, right)
-
 	if union.OrderBy != nil {
 		orderByParts := make([]string, 0, len(union.OrderBy))
 		for _, order := range union.OrderBy {
@@ -416,7 +414,6 @@ func (mapper *SQLMapper) mapUnionStatement(union *sqlparser.Union) string {
 		}
 		parts = append(parts, "ORDER BY", strings.Join(orderByParts, ", "))
 	}
-
 	if union.Limit != nil {
 		limitParts := []string{"LIMIT", mapper.mapExpr(union.Limit.Rowcount)}
 		if union.Limit.Offset != nil {
@@ -424,6 +421,5 @@ func (mapper *SQLMapper) mapUnionStatement(union *sqlparser.Union) string {
 		}
 		parts = append(parts, strings.Join(limitParts, " "))
 	}
-
 	return strings.Join(parts, " ")
 }
