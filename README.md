@@ -214,72 +214,44 @@ GROUP BY (o.payload ->> 'order_id'), (c.payload ->> 'customer_name')
 package main
 
 import (
-    "fmt"
-    "log"
-    
-    "sqlalchemy/converter"
-    "sqlalchemy/db"
+	"fmt"
+	"log"
+
+	"sqlalchemy/converter"
 )
 
 func main() {
-    // 1. 配置数据库连接
-    cfg := db.DBConfig{
-        Host:     "127.0.0.1",      // PostgreSQL 主机地址
-        Port:     5432,             // 端口号
-        DBName:   "tsdb",           // 数据库名
-        User:     "postgres",       // 用户名
-        Password: "your_password",  // 密码
-    }
-    
-    // 2. 指定数据表信息
-    table := "tsdb_table"      // 你的 TimescaleDB 表名
-    payloadCol := "payload"    // JSONB 字段列名
-    topic := "topic"           // JSONB 中标识数据类型的字段名
-    
-    // 3. 自动检测数值类型字段
-    topicFields, err := db.LoadNumericFields(cfg, table, payloadCol)
-    if err != nil {
-        log.Fatalf("❌ 加载数值字段失败: %v", err)
-    }
-    
-    // 4. 合并所有 topic 的数值字段
-    numericFields := make(map[string]struct{})
-    for _, fields := range topicFields {
-        for field := range fields {
-            numericFields[field] = struct{}{}
-        }
-    }
-    
-    // 5. 定义要转换的 SQL 查询
-    originalSQL := `
-        SELECT device_id, 
-               AVG(temperature) as avg_temp,
-               MAX(pressure) as max_pressure
-        FROM sensor_data
-        WHERE temperature > 30
-        GROUP BY device_id
-        HAVING COUNT(*) > 100
-        ORDER BY avg_temp DESC
-        LIMIT 20
-    `
-    
-    // 6. 执行 SQL 转换
-    mapper, err := converter.NewSQLMapper(
-        originalSQL,      // 原始 SQL
-        numericFields,    // 数值字段映射
-        table,            // 物理表名
-        payloadCol,       // JSONB 列名
-        topic,            // topic 字段名
-    )
-    if err != nil {
-        log.Fatalf("❌ SQL 转换失败: %v", err)
-    }
-    
-    // 7. 输出结果
-    fmt.Println("📝 原始 SQL:")
-    fmt.Println(mapper.OriginalSQL)
-    
-    fmt.Println("\n🔧 转换后的 SQL:")
-    fmt.Println(mapper.MappedSQL)
+
+	originalSQL := `
+	SELECT code,
+	       COUNT(*) as alarm_count,
+	       MAX(value) as max_value,
+	       MIN(value) as min_value,
+	       AVG(value) as avg_value
+	FROM factory_alarm_pump_alarm
+	WHERE threshold > 20 OR threshold < 16
+	GROUP BY code
+	HAVING COUNT(*) > 0
+	ORDER BY alarm_count DESC, max_value DESC
+	LIMIT 10;
+	`
+
+	mappedSQL, err := converter.MapSQLShot(
+		"127.0.0.1",
+		5432,
+		"tsdb",
+		"postgres",
+		"123456",
+		"tsdb_table",
+		"payload",
+		"topic",
+		originalSQL,
+	)
+	if err != nil {
+		log.Fatalf("❌ Error: %v", err)
+	}
+
+	fmt.Println("✨ Mapped SQL:")
+	fmt.Println(mappedSQL)
 }
 ```
