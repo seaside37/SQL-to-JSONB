@@ -2,32 +2,12 @@ package converter
 
 import (
 	"fmt"
+	"regexp"
+	"strings"
 
 	"sqlalchemy/db"
 )
 
-// MapSQLShot
-// Wrap entire SQL mapping pipeline:
-// - Load numeric fields from PostgreSQL
-// - Build SQL mapper
-// - Return mapped SQL
-//
-// Parameters:
-//
-//	host, port, dbName, user, password : DB connection info
-//	table        : TSDB table name
-//	payloadCol   : JSONB column
-//	topicField   : JSONB topic field name
-//	originalSQL  : original SQL string
-//
-// Returns:
-//
-//	mappedSQL string, error
-//
-// Usage:
-//
-//	mapped, err := MapSQLOnce("127.0.0.1", 5432, "tsdb", "postgres", "123456",
-//	                          "tsdb_table", "payload", "topic", sql)
 func MapSQLShot(
 	host string,
 	port int,
@@ -40,7 +20,6 @@ func MapSQLShot(
 	originalSQL string,
 ) (string, error) {
 
-	// 1️⃣ Build DB config
 	cfg := db.DBConfig{
 		Host:     host,
 		Port:     port,
@@ -49,13 +28,11 @@ func MapSQLShot(
 		Password: password,
 	}
 
-	// 2️⃣ Load numeric fields from PostgreSQL
 	topicFields, err := db.LoadNumericFields(cfg, table, payloadCol)
 	if err != nil {
 		return "", fmt.Errorf("load numeric fields failed: %w", err)
 	}
 
-	// Flatten the topic→fields map to a simple field set
 	numericFields := make(map[string]struct{})
 	for _, fields := range topicFields {
 		for f := range fields {
@@ -63,12 +40,33 @@ func MapSQLShot(
 		}
 	}
 
-	// 3️⃣ Create SQL mapper
+	// 处理 SELECT * 的情况
+	allFields, err := db.LoadAllFields(cfg, table, payloadCol)
+	if err != nil {
+		return "", fmt.Errorf("load all fields failed: %w", err)
+	}
+	re := regexp.MustCompile(`(?i)SELECT\s+\*\s+FROM\s+(\S+)`)
+	matches := re.FindStringSubmatch(originalSQL)
+	if len(matches) == 2 {
+		fromTable := matches[1]
+
+		fields, ok := allFields[fromTable]
+		if ok && len(fields) > 0 {
+			fieldExprs := make([]string, 0, len(fields))
+			for _, f := range fields {
+				expr := fmt.Sprintf("(%s ->> '%s') AS %s", payloadCol, f, f)
+				fieldExprs = append(fieldExprs, expr)
+			}
+			fieldsStr := strings.Join(fieldExprs, ", ")
+			// 替换 * 为具体字段
+			originalSQL = re.ReplaceAllString(originalSQL, fmt.Sprintf("SELECT %s FROM %s", fieldsStr, fromTable))
+		}
+	}
+
 	mapper, err := NewSQLMapper(originalSQL, numericFields, table, payloadCol, topicField)
 	if err != nil {
 		return "", fmt.Errorf("SQL parse/map failed: %w", err)
 	}
 
-	// 4️⃣ Return result
 	return mapper.MappedSQL, nil
 }
