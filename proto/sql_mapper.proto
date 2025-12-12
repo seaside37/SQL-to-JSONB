@@ -1,0 +1,26 @@
+syntax = "proto3";
+
+package rpc;
+
+option go_package = "sqlalchemy/rpc";
+
+service SQLMapperService {
+  rpc MapSQLShot (MapSQLShotRequest) returns (MapSQLShotResponse);
+}
+
+message MapSQLShotRequest {
+  string host = 1;
+  int32 port = 2;
+  string dbname = 3;
+  string username = 4;
+  string password = 5;
+  string table = 6;
+  string payload_col = 7;
+  string topic = 8;
+  string sql = 9;
+}
+
+message MapSQLShotResponse {
+  string mapped_sql = 1;
+  string error = 2;
+}
