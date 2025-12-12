@@ -198,6 +198,7 @@ GROUP BY (o.payload ->> 'order_id'), (c.payload ->> 'customer_name')
 ```
 
 ## 🚀 快速开始
+
 ### JSONB数据结构
 ```json
 {
@@ -253,5 +254,68 @@ func main() {
 
 	fmt.Println("✨ Mapped SQL:")
 	fmt.Println(mappedSQL)
+}
+```
+
+### GRPC服务
+```go
+package main
+
+import (
+	"context"
+	"log"
+	"net"
+
+	"sqlalchemy/converter" // 你的 MapSQLShot 逻辑
+	pb "sqlalchemy/rpc"    // import 生成的 proto 包
+
+	"google.golang.org/grpc"
+)
+
+// server 实现 proto 定义的 gRPC 接口
+type server struct {
+	pb.UnimplementedSQLMapperServiceServer
+}
+
+// MapSQLShot RPC 实现
+func (s *server) MapSQLShot(ctx context.Context, req *pb.MapSQLShotRequest) (*pb.MapSQLShotResponse, error) {
+	mappedSQL, err := converter.MapSQLShot(
+		req.Host,
+		int(req.Port),
+		req.Dbname,
+		req.Username,
+		req.Password,
+		req.Table,
+		req.PayloadCol,
+		req.Topic,
+		req.Sql,
+	)
+
+	if err != nil {
+		return &pb.MapSQLShotResponse{
+			MappedSql: "",
+			Error:     err.Error(),
+		}, nil
+	}
+
+	return &pb.MapSQLShotResponse{
+		MappedSql: mappedSQL,
+		Error:     "",
+	}, nil
+}
+
+func main() {
+	lis, err := net.Listen("tcp", ":50051")
+	if err != nil {
+		log.Fatalf("failed to listen: %v", err)
+	}
+
+	grpcServer := grpc.NewServer()
+	pb.RegisterSQLMapperServiceServer(grpcServer, &server{})
+
+	log.Println("gRPC server listening on :50051")
+	if err := grpcServer.Serve(lis); err != nil {
+		log.Fatalf("failed to serve: %v", err)
+	}
 }
 ```
