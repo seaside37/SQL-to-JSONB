@@ -266,8 +266,8 @@ import (
 	"log"
 	"net"
 
-	"sqlalchemy/converter" // 你的 MapSQLShot 逻辑
-	pb "sqlalchemy/rpc"    // import 生成的 proto 包
+	"sqlalchemy/converter"
+	pb "sqlalchemy/rpc"
 
 	"google.golang.org/grpc"
 )
